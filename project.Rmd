@@ -1,0 +1,125 @@
+---
+title: "Untitled"
+author: "Shufei Li"
+date: "4/29/2020"
+output: html_document
+---
+
+```{r library require dpackages}
+library(tidyverse)
+library(rvest)
+library(lubridate)
+library(stringr)
+library(xml2)
+library(magrittr)
+library(gridExtra)
+library(gutenbergr)
+library(tidytext)
+
+library(grid)
+library(RColorBrewer)
+library(ggrepel)
+library(ggthemes)
+library(viridis)
+library(ggmap)
+library(wordcloud2)
+```
+
+```{r importing the data from two sources}
+ufo_sightings <- readr::read_csv("https://raw.githubusercontent.com/rfordatascience/tidytuesday/master/data/2019/2019-06-25/ufo_sightings.csv")
+
+ufo_NJ <-'http://www.nuforc.org/webreports/ndxlNJ.html' %>%
+  read_html() %>% html_nodes(xpath="//table") %>% html_table(fill=F)%>%.[[1]]
+```
+
+```{r register_goole() in order to using geocode()}
+api.key.Li <- 'AIzaSyAQq4YBwvF7W9ywo2K_1IAV9FyiUZ6WMuw'
+register_google(key = api.key.Li)
+```
+
+```{r data wrangling1}
+ufo_NJ_1 <- ufo_sightings %>%
+  subset(state == 'nj')
+
+date_1 <- as.Date('2010-01-01')
+date_2 <- as.Date('2014-01-01')
+date_3 <- as.Date('2020-05-01')
+ufo_nj1 <-  ufo_NJ_1%>% 
+  separate(date_time, c("date", "time"), sep = " ") %>%
+  mutate(date = as.Date(date,"%m/%d/%Y"),
+         weekday = weekdays(date)) %>%
+  subset(date > date_1) %>%
+  select('date','time','city_area','ufo_shape',"description",'longitude',"latitude",'weekday')
+
+ufo_nj2 <- ufo_NJ %>%
+  separate('Date / Time',c('date','time'),sep = " ") %>%
+  mutate(date = mdy(date),
+         weekday = weekdays(date),
+         City = paste(.$City,'nj',sep = ','))%>%
+  subset(date > date_2)%>%
+  subset(date < date_3)%>%
+  mutate(longitude = geocode(.$City)$lon,
+         latitude = geocode(.$City)$lat)
+```
+
+```{r data wrangling 2}
+ufo_nj3 <- ufo_nj2 %>%
+  select('date','time','City','Shape','Summary','longitude','latitude','weekday')%>%
+  subset(longitude > -76)
+names(ufo_nj3)<-c("date","time","city_area","ufo_shape","description","longitude","latitude","weekday")
+NJ_UFO <- rbind(ufo_nj1,ufo_nj3)
+
+NJ_UFO$month_name<- month.name[month(NJ_UFO$date)]
+NJ_UFO <- NJ_UFO %>%
+  separate(time, c("hour", "minute"), sep = ":") 
+```
+
+
+```{r Location of UFO in New Jersey}
+states_map<-map_data("county", region = "New Jersey")
+
+NJMap<-ggplot() + 
+  geom_map(data = states_map, map = states_map,aes(x = long, y = lat, map_id = region, group = group),fill = "white", color = "blue", size = 0.1) + theme_fivethirtyeight()
+
+NJMap + geom_point(data=NJ_UFO, aes(x=longitude,y=latitude),alpha=.75,size=.5)+ggtitle('Location of UFO sightings in the NJ')
+```
+
+
+```{r UFO observations during the day}
+NJ_UFO %>% group_by(hour,month_name) %>% summarize(count=n()) %>% ggplot(aes(x=factor(hour),y=count,color=month_name,group=month_name)) + geom_line() + theme_fivethirtyeight() + scale_color_manual(name="",values=brewer.pal(12,'Paired')) + geom_point(color='black',size=.5,alpha=1) + ggtitle('# of UFO observations during the day')
+```
+```{r UFO observations during the week}
+NJ_UFO %>% group_by(weekday,month_name) %>% summarize(count=n()) %>% ggplot(aes(x=weekday,y=count,color=month_name,group=month_name)) + geom_line() + theme_fivethirtyeight() + scale_color_brewer(name="",palette='Paired') + geom_point(color='black',size=.5,alpha=1) + ggtitle('# of UFO observations during the week')
+```
+
+```{r high frequency words on describing UFO}
+NJ_describ <- NJ_UFO %>% select('description','city_area')
+high_words <- NJ_describ %>%
+  mutate(description = str_replace_all(.$description, "&#44"," ") )%>%
+  unnest_tokens(word,description)%>%
+  anti_join(stop_words) %>%
+  count(word, sort = TRUE)
+high_words
+```
+```{r plot wordcloud of high_words}
+wordcloud2(high_words,size=2)
+```
+```{r the number of UFO shapes}
+UFO<- NJ_UFO %>%
+  mutate(ufo_shape = tolower(ufo_shape))
+
+ufooo <- UFO%>% group_by(ufo_shape) %>% summarize(count=n())%>% arrange(count)
+count_unkonwn = ufooo[which(ufooo$ufo_shape == 'unknown'),]$count + ufooo[which(ufooo$ufo_shape == 'other'),]$count + ufooo[which(ufooo$ufo_shape == ''),]$count+ufooo[which(is.na(ufooo$ufo_shape)),]$count
+data =data.frame(ufo_shape = 'unkonwn',count= count_unkonwn)
+uf = ufooo[-c(which(is.na(ufooo$ufo_shape)),which(ufooo$ufo_shape == ''),which(ufooo$ufo_shape == 'other'),which(ufooo$ufo_shape == 'unknown')), ]
+
+ufo_shape = rbind(uf,data)
+p1 <- ufo_shape %>% ggplot(aes(x=ufo_shape,y=count,color=ufo_shape,group=ufo_shape)) + geom_bar(stat="identity",fill="white") +coord_flip() + ggtitle('# of UFO Shapes in the NJ')
+p1
+```
+
+
+```{r write clean data to a csv file}
+#write.csv(NJ_UFO,file="NJ_UFO.csv",quote=F,row.names = F)
+```
+
